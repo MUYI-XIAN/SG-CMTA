@@ -1,6 +1,3 @@
-# -------------------------------------------------------------------------------------
-# § 1. 全局导入
-# -------------------------------------------------------------------------------------
 import argparse
 import csv
 import math
@@ -42,7 +39,6 @@ from torch.utils.data import (
 )
 from tqdm import tqdm
 
-# --- 新增的导入 ---
 try:
     import openslide
     import torchvision.models as models
@@ -56,10 +52,6 @@ except ImportError:
     print("pip install openslide-python torchvision scikit-learn opencv-python-headless matplotlib")
     print("=" * 60)
     raise
-
-# -------------------------------------------------------------------------------------
-# § 2. 通用工具模块 (源自: utils/)
-# -------------------------------------------------------------------------------------
 
 
 def parse_args():
@@ -130,8 +122,6 @@ def parse_args():
     )
     parser.add_argument("--alpha", type=float, default=0.5, help="hyper-parameter of loss function")
 
-    # --- 创新点控制开关 ---
-    # 默认开启创新模块（由单一模块升级为“三模块协同套件”），以便进行消融实验
     parser.add_argument(
         "--use_innovation",
         action="store_true",
@@ -638,9 +628,6 @@ def set_seed(seed=7):
     torch.backends.cudnn.deterministic = True
 
 
-# -------------------------------------------------------------------------------------
-# § 3. 模型组件
-# -------------------------------------------------------------------------------------
 def initialize_weights(module):
     for m in module.modules():
         if isinstance(m, nn.Linear):
@@ -1204,27 +1191,7 @@ class MultiheadAttention(Module):
             )
 
 
-# -------------------------------------------------------------------------------------
-# § 4. 核心模型架构
-# -------------------------------------------------------------------------------------
-
-# --- 创新点拆分：三模块协同注意力增强套件（流程与原 DSAM-AF 完全一致） ---
-# 原逻辑：feat -> (自生成 pred) -> 前景/背景双流 ASPP -> 拼接 -> Pred_Layer 输出回 in_c -> 返回 enhanced_feat
-#
-# 现升级为三个“创新点/模块”：
-# 1) SGAP：Self-Generated Attention Prior（自生成注意力先验）
-# 2) DSEP：Dual-Stream Atrous Context Pyramid（双流空洞多尺度上下文金字塔）
-# 3) ARFH：Adaptive Residual Fusion Head（自适应残差融合头）
-#
-# 注意：仅拆分与命名升级，计算流程、张量变换、残差接口完全保持不变。
-
-
 class AdaptiveResidualProjectionHead(nn.Module):
-    """
-    原 Pred_Layer 的严谨改名版本：保持实现不变
-    - 输入: concat_dim (前景/背景双流拼接后的通道数)
-    - 输出: out_c (= in_c)，以保证与 Transformer 残差连接维度一致
-    """
     def __init__(self, in_c=256, out_c=None):
         super(AdaptiveResidualProjectionHead, self).__init__()
         self.output_dim = out_c if out_c is not None else 256
@@ -1244,9 +1211,6 @@ class AdaptiveResidualProjectionHead(nn.Module):
 
 
 class AtrousSpatialContextPyramid(nn.Module):
-    """
-    原 ASPP 的严谨改名版本：保持实现不变
-    """
     def __init__(self, in_c, mid_c=None):
         super(AtrousSpatialContextPyramid, self).__init__()
         if mid_c is None:
@@ -1284,11 +1248,6 @@ class AtrousSpatialContextPyramid(nn.Module):
 
 
 class SelfGeneratedAttentionPrior(nn.Module):
-    """
-    创新点 1 / SGAP:
-    Self-Generated Attention Prior（自生成注意力先验）
-    - 由特征自身生成 1-channel prior（与原 initial_pred + interpolate + sigmoid 保持一致）
-    """
     def __init__(self, in_c: int):
         super(SelfGeneratedAttentionPrior, self).__init__()
         self.initial_pred = nn.Sequential(
@@ -1312,13 +1271,6 @@ class SelfGeneratedAttentionPrior(nn.Module):
 
 
 class DualStreamAtrousContextPyramid(nn.Module):
-    """
-    创新点 2 / DSEP:
-    Dual-Stream Atrous Context Pyramid（双流空洞多尺度上下文金字塔）
-    - 前景流: feat * pred
-    - 背景流: feat * (1 - pred)
-    - 每一路均用同构多尺度空洞卷积金字塔（与原两路 ASPP 一致）
-    """
     def __init__(self, in_c: int, mid_c: Optional[int] = None):
         super(DualStreamAtrousContextPyramid, self).__init__()
         if mid_c is None:
@@ -1336,12 +1288,6 @@ class DualStreamAtrousContextPyramid(nn.Module):
 
 
 class AdaptiveResidualFusionHead(nn.Module):
-    """
-    创新点 3 / ARFH:
-    Adaptive Residual Fusion Head（自适应残差融合头）
-    - 将双流金字塔输出拼接后映射回 in_c，以满足残差接口
-    - 与原 rgbd_pred_layer（Pred_Layer）逻辑一致
-    """
     def __init__(self, in_c: int, aspp_out_dim: int):
         super(AdaptiveResidualFusionHead, self).__init__()
         concat_dim = aspp_out_dim * 2
@@ -1350,9 +1296,6 @@ class AdaptiveResidualFusionHead(nn.Module):
     def forward(self, ff_feat: torch.Tensor, bf_feat: torch.Tensor) -> torch.Tensor:
         enhanced_feat, _ = self.fusion_head(torch.cat((ff_feat, bf_feat), 1))
         return enhanced_feat
-
-
-# -----------------------------------
 
 
 class TransLayer(nn.Module):
@@ -1385,12 +1328,10 @@ class PPEG(nn.Module):
         self.use_innovation = use_innovation
 
         if self.use_innovation:
-            # 三模块协同创新套件（替代原 DSAM-AF，流程保持一致）
             self.sgap = SelfGeneratedAttentionPrior(in_c=dim)
             self.dsep = DualStreamAtrousContextPyramid(in_c=dim, mid_c=max(64, dim // 4))
             self.arfh = AdaptiveResidualFusionHead(in_c=dim, aspp_out_dim=self.dsep.aspp_out_dim)
         else:
-            # 标准多尺度卷积位置编码（原逻辑保持）
             self.proj = nn.Conv2d(dim, dim, 7, 1, 7 // 2, groups=dim)
             self.proj1 = nn.Conv2d(dim, dim, 5, 1, 5 // 2, groups=dim)
             self.proj2 = nn.Conv2d(dim, dim, 3, 1, 3 // 2, groups=dim)
@@ -1403,11 +1344,8 @@ class PPEG(nn.Module):
         feat = cnn_feat
 
         if self.use_innovation:
-            # 1) SGAP：自生成注意力先验
             pred = self.sgap(feat)
-            # 2) DSEP：双流多尺度上下文提取
             ff_feat, bf_feat = self.dsep(feat, pred)
-            # 3) ARFH：自适应残差融合回归
             pos_encoding_component = self.arfh(ff_feat, bf_feat)
         else:
             pos_encoding_component = self.proj(feat) + self.proj1(feat) + self.proj2(feat)
@@ -1506,7 +1444,6 @@ class CMTA(nn.Module):
             sig_networks.append(nn.Sequential(*fc_omic))
         self.genomics_fc = nn.ModuleList(sig_networks)
 
-        # 创新开关：传递至 Transformer_P（其内部 PPEG 已升级为三模块套件）
         self.pathomics_encoder = Transformer_P(feature_dim=hidden[-1], use_innovation=use_innovation)
         self.pathomics_decoder = Transformer_P(feature_dim=hidden[-1], use_innovation=use_innovation)
 
@@ -1602,11 +1539,6 @@ class CMTA(nn.Module):
                 cls_token_genomics_encoder,
                 cls_token_genomics_decoder,
             )
-
-
-# -------------------------------------------------------------------------------------
-# § 5. 数据集类
-# -------------------------------------------------------------------------------------
 
 
 class ResNet_Feature_Extractor(nn.Module):
@@ -1818,9 +1750,6 @@ class Survival_SVS_Dataset(Dataset):
         self.genomic_features = transformed
 
 
-# -------------------------------------------------------------------------------------
-# § 6. 训练引擎
-# -------------------------------------------------------------------------------------
 class Engine(object):
     def __init__(self, args, results_dir):
         self.args = args
@@ -2018,9 +1947,6 @@ class Engine(object):
         torch.save(state, self.filename_best)
 
 
-# -------------------------------------------------------------------------------------
-# § 7. 主执行逻辑
-# -------------------------------------------------------------------------------------
 def create_attention_heatmap(slide_path, coords, attention_scores, args, output_path):
     print("正在生成高质量的注意力热图...")
     try:
@@ -2088,7 +2014,7 @@ def create_attention_heatmap(slide_path, coords, attention_scores, args, output_
     final_image = np.where(tissue_mask_3c, overlay, thumbnail_np)
 
     output_dir = os.path.dirname(output_path)
-)
+
 
     plt.figure(figsize=(12, 12), dpi=300)
     plt.imshow(final_image)
