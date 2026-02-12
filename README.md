@@ -1,5 +1,4 @@
-# SGCMTA: Self-Generated Collaborative Multi-modal Transformer Attention for Survival Prediction
-
+# SG-CMTA
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/PyTorch-1.12+-red.svg" alt="PyTorch">
